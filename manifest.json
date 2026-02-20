@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "Highlighter",
+  "version": "1.0.0",
+  "description": "Highlight text on any webpage. Highlights persist across sessions.",
+  "permissions": ["storage", "tabs"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Highlighter"
+  },
+  "commands": {
+    "highlight-selection": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+H"
+      },
+      "description": "Highlight selected text"
+    }
+  }
+}
