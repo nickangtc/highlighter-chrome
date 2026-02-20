@@ -2,12 +2,94 @@
   var highlightsEl = document.getElementById('highlights');
   var emptyEl = document.getElementById('empty');
   var urlEl = document.getElementById('url');
-  var hintEl = document.getElementById('hint');
+  var shortcutDisplay = document.getElementById('shortcut-display');
+  var shortcutChangeBtn = document.getElementById('shortcut-change');
+  var shortcutRecorder = document.getElementById('shortcut-recorder');
 
-  // Show keyboard shortcut hint
   var isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
-  hintEl.textContent = 'Select text + ' + (isMac ? '\u2318' : 'Ctrl') + '+Shift+H to highlight';
+  var STORAGE_KEY = 'hltr_shortcut';
 
+  function defaultShortcut() {
+    return { key: 'e', ctrlKey: !isMac, shiftKey: true, altKey: false, metaKey: isMac };
+  }
+
+  function formatShortcut(sc) {
+    var parts = [];
+    if (isMac) {
+      if (sc.ctrlKey) parts.push('\u2303');
+      if (sc.altKey) parts.push('\u2325');
+      if (sc.shiftKey) parts.push('\u21E7');
+      if (sc.metaKey) parts.push('\u2318');
+    } else {
+      if (sc.ctrlKey) parts.push('Ctrl');
+      if (sc.altKey) parts.push('Alt');
+      if (sc.shiftKey) parts.push('Shift');
+      if (sc.metaKey) parts.push('Meta');
+    }
+    parts.push(sc.key.toUpperCase());
+    return parts.join(isMac ? '' : '+');
+  }
+
+  // -- Shortcut config --
+  function loadShortcut() {
+    chrome.storage.local.get([STORAGE_KEY], function (r) {
+      var sc = r[STORAGE_KEY] || defaultShortcut();
+      shortcutDisplay.textContent = formatShortcut(sc);
+    });
+  }
+
+  var recording = false;
+
+  shortcutChangeBtn.addEventListener('click', function () {
+    if (recording) {
+      stopRecording();
+    } else {
+      startRecording();
+    }
+  });
+
+  function startRecording() {
+    recording = true;
+    shortcutChangeBtn.textContent = 'Cancel';
+    shortcutRecorder.style.display = '';
+    document.addEventListener('keydown', recordKey, true);
+  }
+
+  function stopRecording() {
+    recording = false;
+    shortcutChangeBtn.textContent = 'Change';
+    shortcutRecorder.style.display = 'none';
+    document.removeEventListener('keydown', recordKey, true);
+  }
+
+  function recordKey(e) {
+    e.preventDefault();
+    e.stopPropagation();
+
+    // Ignore if only modifier keys are pressed
+    var modOnly = ['Control', 'Shift', 'Alt', 'Meta'].indexOf(e.key) >= 0;
+    if (modOnly) return;
+
+    // Require at least one modifier
+    if (!e.ctrlKey && !e.altKey && !e.metaKey) return;
+
+    var sc = {
+      key: e.key.toLowerCase(),
+      ctrlKey: e.ctrlKey,
+      shiftKey: e.shiftKey,
+      altKey: e.altKey,
+      metaKey: e.metaKey
+    };
+
+    chrome.storage.local.set({ [STORAGE_KEY]: sc }, function () {
+      shortcutDisplay.textContent = formatShortcut(sc);
+      stopRecording();
+    });
+  }
+
+  loadShortcut();
+
+  // -- Highlights --
   function getPageKey(url) {
     try {
       var u = new URL(url);
@@ -36,7 +118,6 @@
 
     emptyEl.style.display = 'none';
 
-    // Newest first
     var sorted = highlights.slice().sort(function (a, b) {
       return new Date(b.createdAt) - new Date(a.createdAt);
     });
@@ -65,7 +146,6 @@
       delBtn.className = 'delete-btn';
       delBtn.textContent = '\u00D7';
       delBtn.title = 'Remove highlight';
-      delBtn.dataset.id = h.id;
       delBtn.addEventListener('click', (function (id) {
         return function () { deleteHighlight(id, pk); };
       })(h.id));
@@ -75,7 +155,6 @@
       highlightsEl.appendChild(item);
     }
 
-    // Clear all button when more than one highlight
     if (highlights.length > 1) {
       var clearDiv = document.createElement('div');
       clearDiv.className = 'clear-all';

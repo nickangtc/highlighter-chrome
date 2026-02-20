@@ -221,6 +221,39 @@
     return false;
   });
 
+  // -- Keyboard shortcut --
+  var shortcut = null;
+
+  function defaultShortcut() {
+    var isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+    return { key: 'e', ctrlKey: !isMac, shiftKey: true, altKey: false, metaKey: isMac };
+  }
+
+  function matchesShortcut(e) {
+    if (!shortcut) return false;
+    return e.key.toLowerCase() === shortcut.key
+      && e.ctrlKey === shortcut.ctrlKey
+      && e.shiftKey === shortcut.shiftKey
+      && e.altKey === shortcut.altKey
+      && e.metaKey === shortcut.metaKey;
+  }
+
+  document.addEventListener('keydown', function (e) {
+    if (matchesShortcut(e)) {
+      e.preventDefault();
+      e.stopPropagation();
+      highlightSelection();
+    }
+  }, true);
+
+  chrome.storage.local.get(['hltr_shortcut'], function (r) {
+    shortcut = r.hltr_shortcut || defaultShortcut();
+  });
+
+  chrome.storage.onChanged.addListener(function (changes) {
+    if (changes.hltr_shortcut) shortcut = changes.hltr_shortcut.newValue;
+  });
+
   // -- Init --
   load();
 })();
