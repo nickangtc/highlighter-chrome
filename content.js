@@ -13,6 +13,7 @@
   }
 
   // -- Styles --
+  var DEL_CLS = 'hltr-del';
   const css = document.createElement('style');
   css.textContent = [
     '.' + CLS + '{',
@@ -21,7 +22,19 @@
     'border-radius:2px!important;',
     'box-decoration-break:clone;',
     '-webkit-box-decoration-break:clone;',
-    '}'
+    '}',
+    '.' + DEL_CLS + '{',
+    'position:absolute;',
+    'top:-7px;right:-7px;',
+    'width:15px;height:15px;',
+    'background:#888;color:#fff;',
+    'border-radius:50%;',
+    'font-size:11px;line-height:15px;text-align:center;',
+    'cursor:pointer;z-index:999999;',
+    'font-family:sans-serif;font-style:normal;font-weight:400;',
+    'pointer-events:auto;user-select:none;',
+    '}',
+    '.' + DEL_CLS + ':hover{background:#e74c3c;}'
   ].join('');
   (document.head || document.documentElement).appendChild(css);
 
@@ -43,15 +56,64 @@
   }
 
   // -- Text node helpers --
-  function textNodesUnder(root) {
-    var out = [];
-    var w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
-    var n, off = 0;
-    while ((n = w.nextNode())) {
-      out.push({ node: n, offset: off });
-      off += n.textContent.length;
+  function closestBlock(node) {
+    var el = node.nodeType === Node.TEXT_NODE ? node.parentNode : node;
+    while (el && el !== document.body && el !== document.documentElement) {
+      try {
+        var d = window.getComputedStyle(el).display;
+        if (d !== 'inline' && d !== 'inline-block' && d !== 'inline-flex'
+            && d !== 'inline-grid' && d !== 'inline-table') return el;
+      } catch (e) { return el; }
+      el = el.parentNode;
     }
-    return out;
+    return el || document.body;
+  }
+
+  // Collect text nodes with offsets, inserting virtual newlines between block boundaries
+  function collectTextNodes(root) {
+    var entries = [];
+    var w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+    var n, off = 0, lastBlock = null;
+    while ((n = w.nextNode())) {
+      var block = closestBlock(n);
+      if (lastBlock && block !== lastBlock) {
+        off += 1; // virtual newline between blocks
+      }
+      entries.push({ node: n, offset: off });
+      off += n.textContent.length;
+      lastBlock = block;
+    }
+    // Build full text with virtual newlines
+    var full = '';
+    for (var i = 0; i < entries.length; i++) {
+      while (full.length < entries[i].offset) full += '\n';
+      full += entries[i].node.textContent;
+    }
+    return { entries: entries, full: full };
+  }
+
+  // -- Check if selection is already fully highlighted --
+  function isAlreadyHighlighted(range) {
+    var container = range.commonAncestorContainer;
+    if (container.nodeType === Node.TEXT_NODE) container = container.parentNode;
+    // Entire range within a single highlight span
+    if (container.closest && container.closest('.' + CLS)) return true;
+    // Check every text node in range
+    var walker = document.createTreeWalker(
+      container, NodeFilter.SHOW_TEXT, null
+    );
+    var tn, found = false;
+    while ((tn = walker.nextNode())) {
+      if (!range.intersectsNode(tn)) continue;
+      // Check if this text node's highlighted portion is non-empty
+      var r = document.createRange();
+      r.setStart(tn, tn === range.startContainer ? range.startOffset : 0);
+      r.setEnd(tn, tn === range.endContainer ? range.endOffset : tn.textContent.length);
+      if (r.toString().length === 0) continue;
+      found = true;
+      if (!tn.parentNode.closest('.' + CLS)) return false;
+    }
+    return found;
   }
 
   // -- Create highlight from current selection --
@@ -60,6 +122,13 @@
     if (!sel || sel.isCollapsed || !sel.toString().trim()) return;
 
     var range = sel.getRangeAt(0);
+
+    // Idempotent: skip if already fully highlighted
+    if (isAlreadyHighlighted(range)) {
+      sel.removeAllRanges();
+      return;
+    }
+
     var text = sel.toString();
     var id = uid();
 
@@ -68,8 +137,16 @@
     if (ancestor.nodeType === Node.TEXT_NODE) ancestor = ancestor.parentNode;
 
     var aXPath = xpath(ancestor);
-    var full = ancestor.textContent;
+    var col = collectTextNodes(ancestor);
+    var full = col.full;
     var idx = full.indexOf(text);
+    // Fallback: try normalized match for cross-paragraph selections
+    if (idx === -1) {
+      var normText = text.replace(/\s+/g, ' ').trim();
+      var normFull = full.replace(/\s+/g, ' ');
+      var ni = normFull.indexOf(normText);
+      if (ni >= 0) idx = ni;
+    }
     var ctxBefore = idx >= 0 ? full.substring(Math.max(0, idx - 50), idx) : '';
     var ctxAfter = idx >= 0 ? full.substring(idx + text.length, idx + text.length + 50) : '';
 
@@ -129,12 +206,14 @@
   }
 
   function tryApply(root, data) {
-    var nodes = textNodesUnder(root);
-    var full = '';
-    for (var i = 0; i < nodes.length; i++) full += nodes[i].node.textContent;
+    var col = collectTextNodes(root);
+    var entries = col.entries;
+    var full = col.full;
 
-    // Find best match using context
     var best = -1;
+    var endPos;
+
+    // Strategy 1: exact match with context
     var search = 0;
     while (true) {
       var idx = full.indexOf(data.text, search);
@@ -145,14 +224,50 @@
       if (ctxOk(before, data.ctxBefore) && ctxOk(after, data.ctxAfter)) { best = idx; break; }
       search = idx + 1;
     }
-    if (best === -1) return false;
+    if (best >= 0) {
+      endPos = best + data.text.length;
+    }
 
-    var endPos = best + data.text.length;
+    // Strategy 2: normalized whitespace match
+    if (best === -1) {
+      var normText = data.text.replace(/\s+/g, ' ').trim();
+      if (normText) {
+        var normFull = '';
+        var toOrig = [];
+        var ws = false;
+        for (var c = 0; c < full.length; c++) {
+          if (/\s/.test(full[c])) {
+            if (!ws && normFull.length > 0) {
+              normFull += ' ';
+              toOrig.push(c);
+            }
+            ws = true;
+          } else {
+            normFull += full[c];
+            toOrig.push(c);
+            ws = false;
+          }
+        }
+        var ni = normFull.indexOf(normText);
+        if (ni >= 0) {
+          best = toOrig[ni];
+          var lastNorm = ni + normText.length - 1;
+          // Map end: find original position after last matched char
+          if (lastNorm + 1 < toOrig.length) {
+            endPos = toOrig[lastNorm + 1];
+          } else {
+            endPos = full.length;
+          }
+        }
+      }
+    }
+
+    if (best === -1) return false;
 
     // Collect text nodes to wrap
     var toWrap = [];
-    for (var j = 0; j < nodes.length; j++) {
-      var nd = nodes[j];
+    for (var j = 0; j < entries.length; j++) {
+      var nd = entries[j];
       var nEnd = nd.offset + nd.node.textContent.length;
       if (nEnd <= best || nd.offset >= endPos) continue;
       toWrap.push({
@@ -164,10 +279,10 @@
 
     // Wrap in reverse order so earlier nodes aren't affected by splits
     for (var k = toWrap.length - 1; k >= 0; k--) {
-      var w = toWrap[k];
-      var target = w.node;
-      if (w.start > 0) target = target.splitText(w.start);
-      if (w.end - w.start < target.textContent.length) target.splitText(w.end - w.start);
+      var wr = toWrap[k];
+      var target = wr.node;
+      if (wr.start > 0) target = target.splitText(wr.start);
+      if (wr.end - wr.start < target.textContent.length) target.splitText(wr.end - wr.start);
       var span = document.createElement('span');
       span.className = CLS;
       span.dataset.hid = data.id;
@@ -194,6 +309,63 @@
       p.normalize();
     });
   }
+
+  // Remove from both DOM and storage
+  function removeHighlight(id) {
+    removeFromDOM(id);
+    var key = pageKey();
+    chrome.storage.local.get([key], function (res) {
+      var arr = (res[key] || []).filter(function (h) { return h.id !== id; });
+      chrome.storage.local.set({ [key]: arr });
+    });
+  }
+
+  // -- Hover delete button --
+  var activeDelBtn = null;
+  var activeDelHid = null;
+
+  function showDelete(hid) {
+    if (activeDelHid === hid) return;
+    hideDelete();
+    var spans = document.querySelectorAll('.' + CLS + '[data-hid="' + hid + '"]');
+    if (!spans.length) return;
+    var last = spans[spans.length - 1];
+    last.style.position = 'relative';
+    var btn = document.createElement('span');
+    btn.className = DEL_CLS;
+    btn.textContent = '\u00d7';
+    last.appendChild(btn);
+    activeDelBtn = btn;
+    activeDelHid = hid;
+  }
+
+  function hideDelete() {
+    if (activeDelBtn && activeDelBtn.parentNode) {
+      activeDelBtn.parentNode.removeChild(activeDelBtn);
+    }
+    activeDelBtn = null;
+    activeDelHid = null;
+  }
+
+  document.addEventListener('mouseover', function (e) {
+    var mark = e.target.closest('.' + CLS);
+    if (mark) {
+      showDelete(mark.dataset.hid);
+      return;
+    }
+    if (e.target.closest('.' + DEL_CLS)) return;
+    hideDelete();
+  });
+
+  document.addEventListener('click', function (e) {
+    var del = e.target.closest('.' + DEL_CLS);
+    if (!del) return;
+    e.preventDefault();
+    e.stopPropagation();
+    var hid = activeDelHid;
+    hideDelete();
+    if (hid) removeHighlight(hid);
+  }, true);
 
   // -- Load stored highlights --
   function load() {
@@ -222,15 +394,10 @@
   });
 
   // -- Keyboard shortcut --
-  var shortcut = null;
-
-  function defaultShortcut() {
-    var isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
-    return { key: 'e', ctrlKey: !isMac, shiftKey: true, altKey: false, metaKey: isMac };
-  }
+  var isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+  var shortcut = { key: 'e', ctrlKey: !isMac, shiftKey: true, altKey: false, metaKey: isMac };
 
   function matchesShortcut(e) {
-    if (!shortcut) return false;
     return e.key.toLowerCase() === shortcut.key
       && e.ctrlKey === shortcut.ctrlKey
       && e.shiftKey === shortcut.shiftKey
@@ -247,7 +414,7 @@
   }, true);
 
   chrome.storage.local.get(['hltr_shortcut'], function (r) {
-    shortcut = r.hltr_shortcut || defaultShortcut();
+    if (r.hltr_shortcut) shortcut = r.hltr_shortcut;
   });
 
   chrome.storage.onChanged.addListener(function (changes) {
