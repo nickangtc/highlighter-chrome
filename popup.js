@@ -139,7 +139,33 @@
       meta.className = 'meta';
       meta.textContent = formatDate(h.createdAt);
 
+      var noteRow = document.createElement('div');
+      noteRow.className = 'highlight-note-row';
+      var noteLabel = document.createElement('label');
+      noteLabel.textContent = 'Note:';
+      var noteInput = document.createElement('input');
+      noteInput.className = 'highlight-note-input' + (h.note ? ' has-value' : '');
+      noteInput.type = 'text';
+      noteInput.value = h.note || '';
+      noteInput.placeholder = 'Add a note...';
+      noteInput.addEventListener('change', (function (id) {
+        return function (e) {
+          var val = e.target.value.trim();
+          chrome.storage.local.get([pk], function (r) {
+            var arr = r[pk] || [];
+            for (var j = 0; j < arr.length; j++) {
+              if (arr[j].id === id) { arr[j].note = val; break; }
+            }
+            chrome.storage.local.set({ [pk]: arr });
+          });
+          e.target.classList.toggle('has-value', !!val);
+        };
+      })(h.id));
+      noteRow.appendChild(noteLabel);
+      noteRow.appendChild(noteInput);
+
       textDiv.appendChild(textSpan);
+      textDiv.appendChild(noteRow);
       textDiv.appendChild(meta);
 
       var delBtn = document.createElement('button');

@@ -38,6 +38,166 @@
   ].join('');
   (document.head || document.documentElement).appendChild(css);
 
+  // -- Note prompt --
+  var NOTE_DISMISS = 30000;
+  var noteEl = null;
+  var noteTimer = null;
+  var noteBar = null;
+  var noteTyping = false;
+  var noteHighlightId = null;
+  var notePageKeyRef = null;
+
+  (function injectNoteStyles() {
+    var s = document.createElement('style');
+    s.textContent = [
+      '.hltr-note-prompt {',
+      '  position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);',
+      '  background: #1a1a2e; color: #fff; border-radius: 12px;',
+      '  padding: 12px 16px; z-index: 999999;',
+      '  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;',
+      '  font-size: 14px; box-shadow: 0 4px 20px rgba(0,0,0,0.3);',
+      '  display: flex; align-items: center; gap: 10px;',
+      '  max-width: 480px; width: calc(100% - 40px);',
+      '  animation: hltr-slide-up 0.25s ease-out;',
+      '}',
+      '@keyframes hltr-slide-up {',
+      '  from { transform: translateX(-50%) translateY(20px); opacity: 0; }',
+      '  to { transform: translateX(-50%) translateY(0); opacity: 1; }',
+      '}',
+      '.hltr-note-prompt label { white-space: nowrap; font-weight: 500; }',
+      '.hltr-note-prompt input {',
+      '  flex: 1; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2);',
+      '  border-radius: 6px; padding: 6px 10px; color: #fff; font-size: 13px;',
+      '  outline: none; min-width: 0;',
+      '}',
+      '.hltr-note-prompt input::placeholder { color: rgba(255,255,255,0.4); }',
+      '.hltr-note-prompt input:focus { border-color: rgba(255,255,255,0.5); }',
+      '.hltr-note-prompt .hltr-note-dismiss {',
+      '  background: none; border: none; color: rgba(255,255,255,0.4);',
+      '  cursor: pointer; font-size: 18px; padding: 0 4px; line-height: 1;',
+      '}',
+      '.hltr-note-prompt .hltr-note-dismiss:hover { color: rgba(255,255,255,0.7); }',
+      '.hltr-note-track {',
+      '  position: absolute; bottom: 0; left: 12px; right: 12px; height: 3px;',
+      '  background: rgba(255,255,255,0.1); border-radius: 0 0 10px 10px; overflow: hidden;',
+      '}',
+      '.hltr-note-bar {',
+      '  height: 100%; background: rgba(255,255,255,0.35); border-radius: 0 0 10px 10px;',
+      '  width: 100%; transform-origin: left;',
+      '}'
+    ].join('\n');
+    (document.head || document.documentElement).appendChild(s);
+  })();
+
+  function startNoteCountdown() {
+    noteTyping = false;
+    if (noteBar) {
+      noteBar.style.transition = 'none';
+      noteBar.style.transform = 'scaleX(1)';
+      noteBar.offsetWidth;
+      noteBar.style.transition = 'transform ' + NOTE_DISMISS + 'ms linear';
+      noteBar.style.transform = 'scaleX(0)';
+    }
+    if (noteTimer) clearTimeout(noteTimer);
+    noteTimer = setTimeout(function () { hideNotePrompt(); }, NOTE_DISMISS);
+  }
+
+  function pauseNoteCountdown() {
+    noteTyping = true;
+    if (noteTimer) { clearTimeout(noteTimer); noteTimer = null; }
+    if (noteBar) {
+      var computed = window.getComputedStyle(noteBar);
+      var current = computed.transform;
+      noteBar.style.transition = 'none';
+      noteBar.style.transform = current;
+    }
+  }
+
+  function showNotePrompt(id, pk) {
+    hideNotePrompt();
+    noteHighlightId = id;
+    notePageKeyRef = pk;
+
+    noteEl = document.createElement('div');
+    noteEl.className = 'hltr-note-prompt';
+
+    var label = document.createElement('label');
+    label.textContent = 'Note';
+
+    var input = document.createElement('input');
+    input.type = 'text';
+    input.placeholder = 'Why did this stand out?';
+
+    var dismiss = document.createElement('button');
+    dismiss.className = 'hltr-note-dismiss';
+    dismiss.textContent = '\u00d7';
+    dismiss.title = 'Dismiss';
+
+    var track = document.createElement('div');
+    track.className = 'hltr-note-track';
+    noteBar = document.createElement('div');
+    noteBar.className = 'hltr-note-bar';
+    track.appendChild(noteBar);
+
+    noteEl.appendChild(label);
+    noteEl.appendChild(input);
+    noteEl.appendChild(dismiss);
+    noteEl.appendChild(track);
+    document.body.appendChild(noteEl);
+
+    setTimeout(function () { input.focus(); }, 100);
+
+    input.addEventListener('input', function () {
+      if (!noteTyping) pauseNoteCountdown();
+    });
+
+    input.addEventListener('focus', function () {
+      if (input.value.length > 0) pauseNoteCountdown();
+    });
+
+    input.addEventListener('blur', function () {
+      if (noteTyping) startNoteCountdown();
+    });
+
+    input.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' && input.value.trim()) {
+        saveHighlightNote(noteHighlightId, notePageKeyRef, input.value.trim());
+        hideNotePrompt();
+      } else if (e.key === 'Escape') {
+        hideNotePrompt();
+      }
+    });
+
+    dismiss.addEventListener('click', function () {
+      hideNotePrompt();
+    });
+
+    startNoteCountdown();
+  }
+
+  function hideNotePrompt() {
+    if (noteTimer) { clearTimeout(noteTimer); noteTimer = null; }
+    if (noteEl && noteEl.parentNode) noteEl.parentNode.removeChild(noteEl);
+    noteEl = null;
+    noteBar = null;
+    noteHighlightId = null;
+    notePageKeyRef = null;
+    noteTyping = false;
+  }
+
+  function saveHighlightNote(id, pk, note) {
+    chrome.storage.local.get([pk], function (res) {
+      var arr = res[pk] || [];
+      for (var i = 0; i < arr.length; i++) {
+        if (arr[i].id === id) {
+          arr[i].note = note;
+          break;
+        }
+      }
+      chrome.storage.local.set({ [pk]: arr });
+    });
+  }
+
   // -- XPath --
   function xpath(node) {
     if (!node || node === document) return '';
@@ -188,13 +348,16 @@
       xpath: aXPath,
       ctxBefore: ctxBefore,
       ctxAfter: ctxAfter,
+      note: '',
       createdAt: new Date().toISOString()
     };
     var key = pageKey();
     chrome.storage.local.get([key], function (res) {
       var arr = res[key] || [];
       arr.push(data);
-      chrome.storage.local.set({ [key]: arr });
+      chrome.storage.local.set({ [key]: arr }, function () {
+        showNotePrompt(id, key);
+      });
     });
   }
 
