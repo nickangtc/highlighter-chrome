@@ -38,6 +38,14 @@
   ].join('');
   (document.head || document.documentElement).appendChild(css);
 
+  // -- Adaptive text color for highlights on dark backgrounds --
+  function adaptTextColor(span) {
+    var rgb = window.getComputedStyle(span).color.match(/\d+/g);
+    if (!rgb) return;
+    var brightness = (rgb[0] * 299 + rgb[1] * 587 + rgb[2] * 114) / 255000;
+    if (brightness > 0.5) span.style.setProperty('color', '#1a1a1a', 'important');
+  }
+
   // -- Note prompt --
   var NOTE_DISMISS = 30000;
   var noteEl = null;
@@ -337,6 +345,7 @@
         span.appendChild(frag);
         r.insertNode(span);
       }
+      adaptTextColor(span);
     }
 
     sel.removeAllRanges();
@@ -451,6 +460,7 @@
       span.dataset.hid = data.id;
       target.parentNode.insertBefore(span, target);
       span.appendChild(target);
+      adaptTextColor(span);
     }
 
     return toWrap.length > 0;
